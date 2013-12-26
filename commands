@@ -20,8 +20,10 @@ if [[ $1 == postgres:* ]]; then
         exit 1
     fi
 
-    LINK_NAME="postgres"
-    CONTAINER_NAME="postgres_$APP"
+    PLUGIN_NAME="postgres"
+    CONTAINER_NAME="$PLUGIN_NAME_$APP"
+    HOST_DIR="$DOKKU_ROOT/$APP/$PLUGIN_NAME"
+    ENVVAR_NAME="DATABASE_URL"
 fi
 
 case "$1" in
@@ -32,21 +34,22 @@ case "$1" in
         echo "Postgres image not found... Did you run 'dokku plugins-install' ?"
         exit 1
     fi
-    # Check if an existing DB volume exists
-    HOST_DIR="$DOKKU_ROOT/.postgres/$APP"
-    if [[ -d $HOST_DIR ]]; then
-        rm -rf $HOST_DIR
-    fi
-    mkdir -p $HOST_DIR
-    VOLUME="$HOST_DIR:/var/lib/postgresql"
+
     # Stop existing container with the same persistent Postgres
     ID=$(docker ps | grep "$CONTAINER_NAME" | awk '{print $1}')
     if [[ ! -z "$ID" ]]; then
         docker stop $ID > /dev/null
     fi
 
+    # Check if an existing DB volume exists
+    if [[ -d $HOST_DIR ]]; then
+        echo "-----> Reusing $CONTAINER_NAME data"
+    else
+        mkdir -p $HOST_DIR
+        chown -R dokku:dokku $HOST_DIR
+    fi
+    VOLUME="$HOST_DIR:/var/lib/postgresql"
     PASS=$(openssl rand -base64 32|base64)
-
     # Launch container
     docker run -v $VOLUME -name=$CONTAINER_NAME -d \
         -e POSTGRESQL_USER=$APP -e POSTGRESQL_PASS=$PASS \
@@ -72,8 +75,8 @@ case "$1" in
     fi
 
     # unlink this container as "postgres"
-    dokku link:delete "$APP" "$CONTAINER_NAME" "$LINK_NAME"
-    dokku config:unset "$APP" DATABASE_URL
+    dokku link:delete "$APP" "$CONTAINER_NAME" "$PLUGIN_NAME"
+    dokku config:unset "$APP" $ENVVAR_NAME
     echo "-----> Postgres container deleted: $CONTAINER_NAME"
     ;;
 
@@ -96,12 +99,12 @@ case "$1" in
         CONTAINER_NAME="postgres_$3"
 
         # link this container as "postgres"
-        dokku link:create "$APP" "$CONTAINER_NAME" "$LINK_NAME"
+        dokku link:create "$APP" "$CONTAINER_NAME" "$PLUGIN_NAME"
 
         # figure out IP to set env var
         ID=$(docker ps -a | grep "$CONTAINER_NAME" | awk '{print $1}')
         IP=$(docker inspect $ID | grep IPAddress | cut -d '"' -f 4)
-        dokku config:set "$APP" DATABASE_URL="postgres://${IP}:5432"
+        dokku config:set "$APP" $ENVVAR_NAME="postgres://${IP}:5432"
         echo "-----> $APP linked to $CONTAINER_NAME container"
     fi
     ;;

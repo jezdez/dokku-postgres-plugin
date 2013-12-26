@@ -1,0 +1,124 @@
+#!/bin/bash
+set -e;
+
+# Check if name is specified
+if [[ $1 == postgres:* ]]; then
+    if [[ -z $2 ]]; then
+        echo "You must specify an app name"
+        exit 1
+    else
+        APP="$2"
+        # Check if app exists with the same name
+        if [[ -d "$DOKKU_ROOT/$APP" ]]; then
+            APP_EXISTS=true
+        else
+            APP_EXISTS=false
+        fi
+    fi
+    if [[ ! -d "$PLUGIN_PATH/link" ]]; then
+        echo "Link plugin not found... Did you install it from https://github.com/rlaneve/dokku-link?"
+        exit 1
+    fi
+
+    LINK_NAME="postgres"
+    CONTAINER_NAME="postgres_$APP"
+fi
+
+case "$1" in
+  postgres:create)
+    # Check if Postgres container is installed
+    IMAGE=$(docker images | grep "jezdez/postgres" | awk '{print $3}')
+    if [[ -z $IMAGE ]]; then
+        echo "Postgres image not found... Did you run 'dokku plugins-install' ?"
+        exit 1
+    fi
+    # Check if an existing DB volume exists
+    HOST_DIR="$DOKKU_ROOT/.postgres/$APP"
+    if [[ -d $HOST_DIR ]]; then
+        rm -rf $HOST_DIR
+    fi
+    mkdir -p $HOST_DIR
+    VOLUME="$HOST_DIR:/var/lib/postgresql"
+    # Stop existing container with the same persistent Postgres
+    ID=$(docker ps | grep "$CONTAINER_NAME" | awk '{print $1}')
+    if [[ ! -z "$ID" ]]; then
+        docker stop $ID > /dev/null
+    fi
+
+    PASS=$(openssl rand -base64 32|base64)
+
+    # Launch container
+    docker run -v $VOLUME -name=$CONTAINER_NAME -d \
+        -e POSTGRESQL_USER=$APP -e POSTGRESQL_PASS=$PASS \
+        jezdez/postgres
+
+    # Link to a potential existing app
+    dokku postgres:link $APP $APP
+    echo "-----> Postgres container created: $CONTAINER_NAME"
+    sleep 1
+    dokku postgres:info $APP
+    ;;
+
+  postgres:delete)
+    # Stop the container
+    ID=$(docker ps -a | grep "$CONTAINER_NAME" |  awk '{print $1}')
+    if [[ ! -z $ID ]]; then
+        docker stop $ID > /dev/null
+        docker rm $ID  > /dev/null
+    fi
+    # Remove persistent volume
+    if [[ -d $HOST_DIR ]]; then
+        rm -rf $HOST_DIR
+    fi
+
+    # unlink this container as "postgres"
+    dokku link:delete "$APP" "$CONTAINER_NAME" "$LINK_NAME"
+    dokku config:unset "$APP" DATABASE_URL
+    echo "-----> Postgres container deleted: $CONTAINER_NAME"
+    ;;
+
+  postgres:info)
+    ID=$(docker ps -a | grep "$CONTAINER_NAME" | awk '{print $1}')
+    IP=$(docker inspect $ID | grep IPAddress | cut -d '"' -f 4)
+    echo
+    echo "       Host: ${IP}"
+    echo "       Private port: 5432"
+    echo
+    ;;
+
+  postgres:link)
+    if $APP_EXISTS; then
+        # Check argument
+        if [[ -z $3 ]]; then
+            echo "You must specify a container name"
+            exit 1
+        fi
+        CONTAINER_NAME="postgres_$3"
+
+        # link this container as "postgres"
+        dokku link:create "$APP" "$CONTAINER_NAME" "$LINK_NAME"
+
+        # figure out IP to set env var
+        ID=$(docker ps -a | grep "$CONTAINER_NAME" | awk '{print $1}')
+        IP=$(docker inspect $ID | grep IPAddress | cut -d '"' -f 4)
+        dokku config:set "$APP" DATABASE_URL="postgres://${IP}:5432"
+        echo "-----> $APP linked to $CONTAINER_NAME container"
+    fi
+    ;;
+
+  postgres:logs)
+    ID=$(docker ps -a | grep "$CONTAINER_NAME" |  awk '{print $1}')
+    docker logs $ID | tail -n 100
+    ;;
+
+  help)
+    cat && cat<<EOF
+    postgres:create <app>                              Create a Postgres container
+    postgres:delete <app>                              Delete specified Postgres container
+    postgres:info <app>                                Display container informations
+    postgres:link <app> <container>                    Link an app to a Postgres container
+    postgres:logs <app>                                Display last logs from Postgres container
+EOF
+    ;;
+
+esac

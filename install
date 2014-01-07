@@ -1,4 +1,7 @@
 #!/bin/bash
 
 # Build docker image
-docker build -t jezdez/postgres github.com/orchardup/docker-postgresql
+TEMPDIR=$(mktemp -d)
+git clone https://github.com/orchardup/docker-postgresql $TEMPDIR
+docker build -q=true -t jezdez/postgres $TEMPDIR
+rm -rf $TEMPDIR

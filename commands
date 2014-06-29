@@ -52,7 +52,8 @@ case "$1" in
     PASS=$(openssl rand -base64 32|base64)
     # Launch container
     docker run -v $VOLUME -name=$CONTAINER_NAME -d \
-        -e POSTGRESQL_USER=$APP -e POSTGRESQL_PASS=$PASS \
+        -e POSTGRESQL_USER=${APP//[^a-zA-z0-9_]/''} -e POSTGRESQL_PASS=$PASS \
+        -e POSTGRESQL_DB=${APP//[^a-zA-z0-9_]/''} \
         jezdez/postgres
 
     # Link to a potential existing app
